@@ -1,0 +1,13 @@
+# make sure there were installed by the base
+numpy
+tensorflow-gpu
+
+sklearn
+pandas
+matplotlib
+h5py
+Pillow
+
+opencv-python
+
+tqdm
