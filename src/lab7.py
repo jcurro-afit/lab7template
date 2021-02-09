@@ -263,7 +263,7 @@ def main():
 
     # label axes
     plt.title('delta_s Whole Values')
-    plt.xlabel('time (s)')
+    plt.xlabel('timestep')
     plt.ylabel('distance (m)')
     plt.legend()
 
