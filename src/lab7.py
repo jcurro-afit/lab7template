@@ -1,21 +1,22 @@
-import numpy as np
 import os
-import pandas as pd
 import re
-from typing import List
-
 import typing
-from tensorflow.keras.layers import Input, Dense, LSTM, TimeDistributed, BatchNormalization
-from tensorflow.keras.optimizers import RMSprop
-from tensorflow.keras.models import Model, load_model
 
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from tensorflow.keras.layers import Input, Dense, LSTM, BatchNormalization
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import RMSprop
+from tensorflow.python.keras.callbacks import ReduceLROnPlateau
+from tensorflow.python.keras.models import load_model
 from tqdm import tqdm
+from tqdm.keras import TqdmCallback
 
 
-def get_deltaS_deltaTheta_from_xy(x: np.ndarray, y: np.ndarray,
-                                  returnDeltaTheta=True, returnTrig=False,
-                                  backFillTheta=False, backFillDeltaD=False) -> np.ndarray:
+def get_delta_s_delta_theta_from_xy(x: np.ndarray, y: np.ndarray,
+                                    return_delta_theta=True, return_trig=False,
+                                    back_fill_theta=False, back_fill_delta_d=False) -> np.ndarray:
     """Converts a sequence of x, y positions to relative distance between sequence steps.
     Can also return the relative angle between sequence steps if desired
     Can also return the sin and cos of the relative angle if desired.
@@ -25,24 +26,24 @@ def get_deltaS_deltaTheta_from_xy(x: np.ndarray, y: np.ndarray,
 
     :param x: ndarray of the x positions. The actual data should be in the last dimension.
     :param y: ndarray of the y positions. The actual data should be in the last dimension.
-    :param returnDeltaTheta: if true will return the relative angle
-    :param returnTrig: if true will return the sin and cos if the relative angle
-    :param backFillTheta: if true will make the first relative angle be equal to the second
-    :param backFillDeltaD: if true will make the first relative distance equal to the second
+    :param return_delta_theta: if true will return the relative angle
+    :param return_trig: if true will return the sin and cos if the relative angle
+    :param back_fill_theta: if true will make the first relative angle be equal to the second
+    :param back_fill_delta_d: if true will make the first relative distance equal to the second
     :return: numpy ndarray with relative angle and distance between time steps.
     This will be same length as the input x,y.
     The actual data is stored in the last dimension in the order:
-    [delta_d, delta_theata, sin(delta_theta), cos(delta_theta), theta)]
+    [delta_d, delta_thegta, sin(delta_theta), cos(delta_theta), theta)]
     The first values either set to zero or back filled if back fill is set.
     :rtype: np.ndarray
     """
-    reduceTo2D = False
+    reduce_to_2d = False
     if x.ndim != y.ndim:
         raise ValueError("x and y should have same dimensions not {0} and {1} respectively".format(x.ndim, y.ndim))
     if x.ndim < 2:
         x = x[None, ...]
         y = y[None, ...]
-        reduceTo2D = True
+        reduce_to_2d = True
 
     delta_x = np.diff(x)
     delta_y = np.diff(y)
@@ -51,7 +52,7 @@ def get_deltaS_deltaTheta_from_xy(x: np.ndarray, y: np.ndarray,
     theta = np.concatenate([np.zeros(shape=(delta_y.shape[0], 1)), np.arctan2(delta_y, delta_x)], axis=-1)
 
     # back fill if necessary
-    if backFillTheta:
+    if back_fill_theta:
         theta[..., 0] = theta[..., 1]
 
     # get the relative distance and angle
@@ -59,38 +60,38 @@ def get_deltaS_deltaTheta_from_xy(x: np.ndarray, y: np.ndarray,
     delta_theta = np.diff(theta)
 
     # get the trig values of the relative angles
-    sinDeltaTheta = np.sin(delta_theta)
-    cosDeltaTheta = np.cos(delta_theta)
+    sin_delta_theta = np.sin(delta_theta)
+    cos_delta_theta = np.cos(delta_theta)
 
     deltas = np.concatenate(
-        [delta_s[..., None], delta_theta[..., None], sinDeltaTheta[..., None], cosDeltaTheta[..., None]], axis=-1)
+        [delta_s[..., None], delta_theta[..., None], sin_delta_theta[..., None], cos_delta_theta[..., None]], axis=-1)
 
     # pad the beginning with zeros to match original size
-    zerosShape = list(deltas.shape)
-    zerosShape[-2] = 1
-    deltas = np.concatenate([np.zeros(zerosShape), deltas], axis=-2)
+    zeros_shape = list(deltas.shape)
+    zeros_shape[-2] = 1
+    deltas = np.concatenate([np.zeros(zeros_shape), deltas], axis=-2)
     # the first cosine term should be 1 not zero
     deltas[..., 0, 3] = 1
 
-    if backFillDeltaD:
+    if back_fill_delta_d:
         deltas[..., 0, 0] = deltas[..., 1, 0]
 
     # only return what they asked for
-    retColumns = [0]
-    if returnDeltaTheta:
-        retColumns += [1]
-    if returnTrig:
-        retColumns += [2, 3]
-    ret = deltas[..., retColumns]
+    ret_columns = [0]
+    if return_delta_theta:
+        ret_columns += [1]
+    if return_trig:
+        ret_columns += [2, 3]
+    ret = deltas[..., ret_columns]
 
-    if reduceTo2D:
+    if reduce_to_2d:
         ret = ret[0]
     return ret
 
 
-def getXYfromDeltas(delta_d: np.ndarray,
-                    delta_theta: np.ndarray,
-                    initial_conditions: np.ndarray = None) -> np.ndarray:
+def get_xy_from_deltas(delta_d: np.ndarray,
+                       delta_theta: np.ndarray,
+                       initial_conditions: np.ndarray = None) -> np.ndarray:
     """Converts a sequence of relative distances and angle changes to 2D x,y positions
     Assumes the starting location is 0,0 unless initial_conditions are given
 
@@ -100,7 +101,7 @@ def getXYfromDeltas(delta_d: np.ndarray,
     :return: a numpy ndarray with the x,y positions in the last dimension
     :rtype: np.ndarray
     """
-    reduceTo2D = False
+    reduce_to_2d = False
     if delta_d.ndim != delta_theta.ndim:
         raise ValueError(
             "delta_d and delta_theta should have same dimensions not {0} and {1} respectively".format(delta_d.ndim,
@@ -108,7 +109,7 @@ def getXYfromDeltas(delta_d: np.ndarray,
     if delta_theta.ndim < 2:
         delta_theta = delta_theta[None, ...]
         delta_d = delta_d[None, ...]
-        reduceTo2D = True
+        reduce_to_2d = True
     if initial_conditions is None:
         initial_conditions = np.zeros(shape=(delta_d.shape[0], 3))
 
@@ -123,13 +124,13 @@ def getXYfromDeltas(delta_d: np.ndarray,
 
     position = np.concatenate([x[..., None], y[..., None]], axis=-1)
 
-    if reduceTo2D:
+    if reduce_to_2d:
         position = position[0]
     return position
 
 
-def get_samples_from_lists(imuList: List[pd.DataFrame],
-                           viList: List[pd.DataFrame],
+def get_samples_from_lists(imuList: typing.List[pd.DataFrame],
+                           viList: typing.List[pd.DataFrame],
                            num_samples: int,
                            seq_len: int,
                            input_columns=None,
@@ -153,10 +154,11 @@ def get_samples_from_lists(imuList: List[pd.DataFrame],
     return x_data, y_data
 
 
-def build_model(seq_len,
-                input_data_size,
-                output_data_size,
-                stateful=False) -> Model:
+def build_model(seq_len: int,
+                input_data_size: int,
+                output_data_size: int,
+                batch_size: int = None,
+                stateful: bool = False) -> Model:
     model: Model
     return model
 
@@ -173,18 +175,18 @@ def main():
     print(imuColumnNames)
 
     # make our variables for the experiment
-    input_columns = []
-    output_columns = []
-    model_name = "model.h5"
+    input_columns: typing.List[str] = []
+    output_columns: typing.List[str] = []
+    model_name: str = "model.h5"
     num_samples: int
     seq_len: int
 
     # read in our raw data
     ignore_first = 2000
-    viListTrain = []
-    imuListTrain = []
-    viListTest = []
-    imuListTest = []
+    vi_list_train: typing.List[pd.DataFrame] = []
+    imu_list_train: typing.List[pd.DataFrame] = []
+    vi_list_test: typing.List[pd.DataFrame] = []
+    imu_list_test: typing.List[pd.DataFrame] = []
     # walk through the oxford directory
     for root, dirs, files in os.walk(fileRoot, topdown=False):
         # we only want the handheld data with synchronized data
@@ -192,34 +194,34 @@ def main():
             # we are going to loop for the number of actual data files (they come in pairs)
             for i in range(len(files) // 2):
                 # the name of the mobile phone data (imu) and the vicon truth data (vi)
-                imuName = os.path.join(root, f"imu{i + 1}.csv")
-                viName = os.path.join(root, f"vi{i + 1}.csv")
-                if os.path.exists(viName) and os.path.exists(imuName):
+                imu_name = os.path.join(root, f"imu{i + 1}.csv")
+                vi_name = os.path.join(root, f"vi{i + 1}.csv")
+                if os.path.exists(vi_name) and os.path.exists(imu_name):
                     # read the csv files into pandas data frames
-                    viTemp = pd.read_csv(viName, names=viconColumnNames)[ignore_first:]
-                    imuTemp = pd.read_csv(imuName, names=imuColumnNames)[ignore_first:]
+                    vi_temp = pd.read_csv(vi_name, names=viconColumnNames)[ignore_first:]
+                    imu_temp = pd.read_csv(imu_name, names=imuColumnNames)[ignore_first:]
 
                     # convert the x,y position to distance and angles
-                    deltas = get_deltaS_deltaTheta_from_xy(viTemp['translation.x'].values,
-                                                           viTemp['translation.y'].values)
+                    deltas = get_delta_s_delta_theta_from_xy(vi_temp['translation.x'].values,
+                                                             vi_temp['translation.y'].values)
                     # add distance and angles to data frame
-                    viTemp['delta_s'] = deltas[..., 0]
-                    viTemp['delta_theta'] = deltas[..., 1]
+                    vi_temp['delta_s'] = deltas[..., 0]
+                    vi_temp['delta_theta'] = deltas[..., 1]
 
                     # put the data frame in the correct list
-                    dataNum = int(re.search(r"data(?P<num>\d+)", root).group("num"))
-                    if dataNum < 5:
-                        viListTrain.append(viTemp)
-                        imuListTrain.append(imuTemp)
+                    data_num = int(re.search(r"data(?P<num>\d+)", root).group("num"))
+                    if data_num < 5:
+                        vi_list_train.append(vi_temp)
+                        imu_list_train.append(imu_temp)
                     else:
-                        viListTest.append(viTemp)
-                        imuListTest.append(imuTemp)
+                        vi_list_test.append(vi_temp)
+                        imu_list_test.append(imu_temp)
 
-    print(f"Read {len(viListTrain)} data frames")
+    print(f"Read {len(vi_list_train)} data frames")
 
     # turn the raw data into sequences
-    _, _ = get_samples_from_lists(imuList=imuListTrain,
-                                  viList=viListTrain,
+    _, _ = get_samples_from_lists(imuList=imu_list_train,
+                                  viList=vi_list_train,
                                   num_samples=num_samples,
                                   seq_len=seq_len,
                                   input_columns=input_columns,
