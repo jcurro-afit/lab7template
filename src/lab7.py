@@ -167,12 +167,16 @@ def main():
     fileRoot = os.path.join("/opt", "data", "Oxford Inertial Tracking Dataset")
 
     # print our column names that we got from the top level description
-    viconColumnNames = "Time Header translation.x translation.y translation.z rotation.x rotation.y rotation.z rotation.w".split(
+    vicon_column_names: typing.List[str] = "Time Header translation.x translation.y translation.z " \
+                                           "rotation.x rotation.y rotation.z rotation.w".split(' ')
+    print(vicon_column_names)
+    imu_column_names: typing.List[str] = "Time attitude_roll(radians) attitude_pitch(radians) attitude_yaw(radians) " \
+                                         "rotation_rate_x(radians/s) rotation_rate_y(radians/s) rotation_rate_z(radians/s) " \
+                                         "gravity_x(G) gravity_y(G) gravity_z(G) " \
+                                         "user_acc_x(G) user_acc_y(G) user_acc_z(G) " \
+                                         "magnetic_field_x(microteslas) magnetic_field_y(microteslas) magnetic_field_z(microteslas)".split(
         ' ')
-    print(viconColumnNames)
-    imuColumnNames = "Time attitude_roll(radians) attitude_pitch(radians) attitude_yaw(radians) rotation_rate_x(radians/s) rotation_rate_y(radians/s) rotation_rate_z(radians/s) gravity_x(G) gravity_y(G) gravity_z(G) user_acc_x(G) user_acc_y(G) user_acc_z(G) magnetic_field_x(microteslas) magnetic_field_y(microteslas) magnetic_field_z(microteslas)".split(
-        ' ')
-    print(imuColumnNames)
+    print(imu_column_names)
 
     # make our variables for the experiment
     input_columns: typing.List[str] = []
@@ -182,7 +186,7 @@ def main():
     seq_len: int
 
     # read in our raw data
-    ignore_first = 2000
+    ignore_first: int = 2000
     vi_list_train: typing.List[pd.DataFrame] = []
     imu_list_train: typing.List[pd.DataFrame] = []
     vi_list_test: typing.List[pd.DataFrame] = []
@@ -198,8 +202,8 @@ def main():
                 vi_name = os.path.join(root, f"vi{i + 1}.csv")
                 if os.path.exists(vi_name) and os.path.exists(imu_name):
                     # read the csv files into pandas data frames
-                    vi_temp = pd.read_csv(vi_name, names=viconColumnNames)[ignore_first:]
-                    imu_temp = pd.read_csv(imu_name, names=imuColumnNames)[ignore_first:]
+                    vi_temp = pd.read_csv(vi_name, names=vicon_column_names)[ignore_first:]
+                    imu_temp = pd.read_csv(imu_name, names=imu_column_names)[ignore_first:]
 
                     # convert the x,y position to distance and angles
                     deltas = get_delta_s_delta_theta_from_xy(vi_temp['translation.x'].values,
