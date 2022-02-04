@@ -33,7 +33,7 @@ def get_delta_s_delta_theta_from_xy(x: np.ndarray, y: np.ndarray,
     :return: numpy ndarray with relative angle and distance between time steps.
     This will be same length as the input x,y.
     The actual data is stored in the last dimension in the order:
-    [delta_d, delta_thegta, sin(delta_theta), cos(delta_theta), theta)]
+    [delta_d, delta_theta, sin(delta_theta), cos(delta_theta), theta)]
     The first values either set to zero or back filled if back fill is set.
     :rtype: np.ndarray
     """
