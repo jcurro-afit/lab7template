@@ -1,6 +1,6 @@
 # make sure there were installed by the base
 numpy
-tensorflow-gpu~=2.3.0
+tensorflow-gpu
 
 sklearn
 pandas
