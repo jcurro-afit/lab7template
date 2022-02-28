@@ -21,7 +21,7 @@ def get_delta_s_delta_theta_from_xy(x: np.ndarray, y: np.ndarray,
     Can also return the relative angle between sequence steps if desired
     Can also return the sin and cos of the relative angle if desired.
 
-    By default the return sequence is the same length as the input sequence but the first timestep is padded to be zero
+    By default, the return sequence is the same length as the input sequence but the first time step is padded to be zero
     If desired the relative distance and/or angle can be backfilled (index 1 is copied to index 0)
 
     :param x: ndarray of the x positions. The actual data should be in the last dimension.
@@ -34,12 +34,16 @@ def get_delta_s_delta_theta_from_xy(x: np.ndarray, y: np.ndarray,
     This will be same length as the input x,y.
     The actual data is stored in the last dimension in the order:
     [delta_d, delta_theta, sin(delta_theta), cos(delta_theta), theta)]
-    The first values either set to zero or back filled if back fill is set.
+    The first values either set to zero or backfilled if backfill is set.
     :rtype: np.ndarray
     """
     reduce_to_2d = False
     if x.ndim != y.ndim:
-        raise ValueError("x and y should have same dimensions not {0} and {1} respectively".format(x.ndim, y.ndim))
+        raise ValueError(f"x and y should have same dimensions not {x.ndim} and {y.ndim} respectively")
+    # if the last dimension is 1, then strip it. For example turn shape of (5, 1000, 1) into (5, 1000)
+    if x.shape[-1] == 1:
+        x = x[..., 0]
+        y = y[..., 0]
     if x.ndim < 2:
         x = x[None, ...]
         y = y[None, ...]
@@ -93,19 +97,22 @@ def get_xy_from_deltas(delta_d: np.ndarray,
                        delta_theta: np.ndarray,
                        initial_conditions: np.ndarray = None) -> np.ndarray:
     """Converts a sequence of relative distances and angle changes to 2D x,y positions
-    Assumes the starting location is 0,0 unless initial_conditions are given
+    Assumes the starting location is 0,0 and starting heading is 0 unless initial_conditions are given
 
     :param delta_d: relative distances between each step in the sequence
-    :param delta_theta: relative angles betweeen each step in the sequence
-    :param initial_conditions: the starting x,y point(s)
+    :param delta_theta: relative angles between each step in the sequence
+    :param initial_conditions: the starting x,y,theta point(s)
     :return: a numpy ndarray with the x,y positions in the last dimension
     :rtype: np.ndarray
     """
     reduce_to_2d = False
     if delta_d.ndim != delta_theta.ndim:
         raise ValueError(
-            "delta_d and delta_theta should have same dimensions not {0} and {1} respectively".format(delta_d.ndim,
-                                                                                                      delta_theta.ndim))
+            f"delta_d and delta_theta should have same dimensions not {delta_d.ndim} and {delta_theta.ndim} respectively")
+    # if the last dimension is 1, then strip it. For example turn shape of (1000, 1) into (1000,)
+    if delta_theta.shape[-1] == 1:
+        delta_theta = delta_theta[..., 0]
+        delta_d = delta_d[..., 0]
     if delta_theta.ndim < 2:
         delta_theta = delta_theta[None, ...]
         delta_d = delta_d[None, ...]
@@ -129,29 +136,74 @@ def get_xy_from_deltas(delta_d: np.ndarray,
     return position
 
 
-def get_samples_from_lists(imuList: typing.List[pd.DataFrame],
-                           viList: typing.List[pd.DataFrame],
-                           num_samples: int,
-                           seq_len: int,
-                           input_columns=None,
-                           output_columns=None) -> typing.Tuple[np.ndarray, np.ndarray]:
-    """Take the raw data and break up into smaller sequences
-    the dataframes in the lists will be 2D (timestep, data)
-    the output numpy arrays will be 3D (sample, timestep, data)
+def read_dataframes(file_root: str,
+                    vicon_column_names: typing.List[str],
+                    imu_column_names: typing.List[str]
+                    ) -> typing.Tuple[typing.List[pd.DataFrame],
+                                      typing.List[pd.DataFrame],
+                                      typing.List[pd.DataFrame],
+                                      typing.List[pd.DataFrame]]:
+    """Reads the csv files of the Oxford Inertial Tracking Dataset into lists of DataFrames
+    breaks into the training and test sets
 
-    :param imuList: the list of pandas dataframes for the imu data
-    :param viList: the list of pandas dataframes for the vi data
-    :param num_samples: the total number of samples to return
-    :param seq_len: the number of time steps in each sequence
+    :param file_root: the root where the Oxford data is with the name "Oxford Inertial Tracking Dataset"
+    :param vicon_column_names: the column names to use for the vicon data
+    :param imu_column_names: the column names to use for the imu data
+    :return: a tuple with four lists. Each list has one dataframes per data collect.
+            The first two lists are the training input and labels. The last two lists are the test inputs and labels.
+    """
+    # read in raw data
+    ignore_first: int = 2000
+    vi_list_train: typing.List[pd.DataFrame] = []
+    imu_list_train: typing.List[pd.DataFrame] = []
+    vi_list_test: typing.List[pd.DataFrame] = []
+    imu_list_test: typing.List[pd.DataFrame] = []
+    for root, dirs, files in os.walk(file_root, topdown=False):
+        if 'handheld' in root and 'syn' in root:
+            for i in range(len(files) // 2):
+                vi_name = os.path.join(root, f"vi{i + 1}.csv")
+                imu_name = os.path.join(root, f"imu{i + 1}.csv")
+                if os.path.exists(vi_name) and os.path.exists(imu_name):
+                    vi_temp = pd.read_csv(vi_name, names=vicon_column_names)[ignore_first:]
+                    imu_temp = pd.read_csv(imu_name, names=imu_column_names)[ignore_first:]
+
+                    deltas = get_delta_s_delta_theta_from_xy(vi_temp['translation.x'].values,
+                                                             vi_temp['translation.y'].values)
+                    vi_temp['delta_s'] = deltas[..., 0]
+                    vi_temp['delta_theta'] = deltas[..., 1]
+
+                    data_num = int(re.search(r"data(?P<num>\d+)", root).group("num"))
+                    if data_num < 5:
+                        vi_list_train.append(vi_temp)
+                        imu_list_train.append(imu_temp)
+                    else:
+                        vi_list_test.append(vi_temp)
+                        imu_list_test.append(imu_temp)
+    print(f"Got {len(vi_list_train)} data frames")
+
+    return vi_list_train, imu_list_train, vi_list_test, imu_list_test
+
+
+def get_dataset_from_lists(imu_list: typing.List[pd.DataFrame],
+                           vi_list: typing.List[pd.DataFrame],
+                           input_columns=None,
+                           output_columns=None,
+                           seq_len: int = 10,
+                           batch_size: int = 32) -> tf.data.Dataset:
+    """Take the raw sequences adn break the up into smaller sequences for training
+    the dataframes in the lists will be 2D (total_sequence_timestep, data)
+    The output of the dataset should be 3D (sample, window_timestep, data)
+
+    :param imu_list: the list of pandas dataframes for the imu data
+    :param vi_list: the list of pandas dataframes for the vi data
     :param input_columns: the columns to use as input
     :param output_columns: the columns to use as output
-    :return:
+    :param seq_len: the number of time steps in each output sequence (how many timesteps in each window)
+    :param batch_size: the size of batches to use for training
+    :return: a dataset object that will return batches of data to train on
     """
-
-    # process the lists of pandas data frames (or whatever type you want) into the sequences to train
-    x_data: np.ndarray
-    y_data: np.ndarray
-    return x_data, y_data
+    ds: tf.data.Dataset
+    return ds
 
 
 def build_model(seq_len: int,
@@ -184,52 +236,26 @@ def main():
     model_name: str = "model.h5"
     num_samples: int
     seq_len: int
+    use_dataset: bool
 
-    # read in our raw data
-    ignore_first: int = 2000
-    vi_list_train: typing.List[pd.DataFrame] = []
-    imu_list_train: typing.List[pd.DataFrame] = []
-    vi_list_test: typing.List[pd.DataFrame] = []
-    imu_list_test: typing.List[pd.DataFrame] = []
-    # walk through the oxford directory
-    for root, dirs, files in os.walk(fileRoot, topdown=False):
-        # we only want the handheld data with synchronized data
-        if 'handheld' in root and 'syn' in root:
-            # we are going to loop for the number of actual data files (they come in pairs)
-            for i in range(len(files) // 2):
-                # the name of the mobile phone data (imu) and the vicon truth data (vi)
-                imu_name = os.path.join(root, f"imu{i + 1}.csv")
-                vi_name = os.path.join(root, f"vi{i + 1}.csv")
-                if os.path.exists(vi_name) and os.path.exists(imu_name):
-                    # read the csv files into pandas data frames
-                    vi_temp = pd.read_csv(vi_name, names=vicon_column_names)[ignore_first:]
-                    imu_temp = pd.read_csv(imu_name, names=imu_column_names)[ignore_first:]
-
-                    # convert the x,y position to distance and angles
-                    deltas = get_delta_s_delta_theta_from_xy(vi_temp['translation.x'].values,
-                                                             vi_temp['translation.y'].values)
-                    # add distance and angles to data frame
-                    vi_temp['delta_s'] = deltas[..., 0]
-                    vi_temp['delta_theta'] = deltas[..., 1]
-
-                    # put the data frame in the correct list
-                    data_num = int(re.search(r"data(?P<num>\d+)", root).group("num"))
-                    if data_num < 5:
-                        vi_list_train.append(vi_temp)
-                        imu_list_train.append(imu_temp)
-                    else:
-                        vi_list_test.append(vi_temp)
-                        imu_list_test.append(imu_temp)
-
-    print(f"Read {len(vi_list_train)} data frames")
+    vi_list_train, imu_list_train, vi_list_test, imu_list_test = read_dataframes(file_root=file_root,
+                                                                                 vicon_column_names=vicon_column_names,
+                                                                                 imu_column_names=imu_column_names)
 
     # turn the raw data into sequences
-    _, _ = get_samples_from_lists(imuList=imu_list_train,
-                                  viList=vi_list_train,
-                                  num_samples=num_samples,
-                                  seq_len=seq_len,
-                                  input_columns=input_columns,
-                                  output_columns=output_columns)
+    ds_train = get_dataset_from_lists(imu_list=imu_list_train,
+                                      vi_list=vi_list_train,
+                                      input_columns=input_columns,
+                                      output_columns=output_columns,
+                                      seq_len=seq_len,
+                                      batch_size=batch_size)
+
+    ds_valid = get_dataset_from_lists(imu_list=imu_list_valid,
+                                      vi_list=vi_list_valid,
+                                      input_columns=input_columns,
+                                      output_columns=output_columns,
+                                      seq_len=seq_len,
+                                      batch_size=batch_size)
 
     input_data_size: int
     output_data_size: int
@@ -241,13 +267,18 @@ def main():
                                    input_data_size,
                                    output_data_size,
                                    stateful=False)
+        # now fit the model
+        model.fit()
+
         model.save(model_name)
     else:
         model = load_model(model_name)
 
-    # build a model that can take very long sequences (or process one step at a time) for our visualization
-    # to make a model remember from one predict call to the next use the `stateful` property of the RNN layers
-    model_one_step: Model = build_model(seq_len,
+    # build a model to predict for very long sequences for our visualization
+    # we will most likely need to call the predict function multiple times since our sequence will not fit into GPU RAM
+    # if we call the predict function multiple times we need to make the model stateful to pass the state to the next predict
+    # remember to set the `stateful` property of each of the RNN layers in the build model function
+    model_stateful: Model = build_model(seq_len,
                                         input_data_size,
                                         output_data_size,
                                         stateful=True)
